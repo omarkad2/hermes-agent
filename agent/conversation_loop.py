@@ -1125,6 +1125,10 @@ def run_conversation(
                     agent.provider == "copilot-acp"
                     or str(agent.base_url or "").lower().startswith("acp://copilot")
                     or str(agent.base_url or "").lower().startswith("acp+tcp://")
+                    # ClaudeCodeClient also returns a plain SimpleNamespace from a
+                    # subprocess, not a stream iterator.
+                    or agent.provider == "claude-code"
+                    or str(agent.base_url or "").lower().startswith("claude-code://")
                 ):
                     _use_streaming = False
                 elif not agent._has_stream_consumers():

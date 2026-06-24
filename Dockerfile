@@ -197,6 +197,26 @@ COPY . .
 # resolution or downloads.
 RUN uv pip install --no-cache-dir --no-deps -e "."
 
+# ---------- Claude Code CLI (for the `claude-code` subscription provider) ----------
+# The `claude-code` provider spawns the official `claude` binary as a
+# subprocess so inference draws on the user's Claude Pro/Max subscription
+# quota instead of pay-per-token API billing (see agent/claude_code_client.py).
+#
+# We install it UNDER /opt/hermes (not the usual global /usr/local) on purpose:
+# in the docker-compose topology the whole /opt/hermes tree is exported as the
+# `hermes-agent-src` named volume, which the WebUI container mounts read-only.
+# The WebUI runs the agent *in-process*, so the subprocess is spawned inside
+# the WebUI container — putting `claude` in the shared source volume makes the
+# same binary reachable from both containers. Each container points the
+# provider at it via HERMES_CLAUDE_CLI (see docker-compose.local.yml).
+#
+# node/npm are already on PATH from the node_source stage above. The npm `bin`
+# is a `#!/usr/bin/env node` launcher, so the WebUI container also needs `node`
+# on PATH; if its base image lacks node, build the extended image in
+# docker/webui.Dockerfile (self-contained native binary) instead.
+RUN npm install -g --prefix /opt/hermes/.claude-cli @anthropic-ai/claude-code && \
+    /opt/hermes/.claude-cli/bin/claude --version
+
 # Keep /opt/hermes immutable for the runtime hermes user. Hosted/container
 # instances must not be able to self-edit the installed source or venv; user
 # data, skills, plugins, config, logs, and dashboard uploads live under

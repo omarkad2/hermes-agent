@@ -1,0 +1,124 @@
+#
+# docker-compose.local.yml — LOCAL Hermes Agent + external Hermes WebUI
+#
+# Builds the Hermes Agent from THIS checkout (so your local `claude-code`
+# provider changes are included) and pairs it with the community
+# `ghcr.io/nesquena/hermes-webui` web interface.
+#
+# ---------------------------------------------------------------------------
+# Quick start
+# ---------------------------------------------------------------------------
+#   cp .env.local.example .env.local        # fill in API keys + a webui password
+#   HERMES_UID=$(id -u) HERMES_GID=$(id -g) \
+#     docker compose -f docker-compose.local.yml --env-file .env.local up -d --build
+#
+# Then log in to Claude ONCE (subscription auth for the claude-code provider).
+# CLAUDE_CONFIG_DIR points both containers at the same dir on the shared
+# `hermes-home` volume, so a single login is seen by both:
+#   docker compose -f docker-compose.local.yml --env-file .env.local \
+#     exec hermes-webui claude login
+#
+# Open http://localhost:8787 and select the "claude-code" provider/model.
+#
+# ---------------------------------------------------------------------------
+# IMPORTANT — refreshing your local code
+# ---------------------------------------------------------------------------
+# `hermes-agent-src` is a NAMED volume seeded from the image's /opt/hermes on
+# FIRST start only. Docker will NOT re-copy a fresh image into a volume that
+# already has data, so after you rebuild the agent image you must recreate the
+# source volume for the WebUI to pick up your code changes:
+#   docker compose -f docker-compose.local.yml down
+#   docker volume rm hermes-local_hermes-agent-src
+#   docker compose -f docker-compose.local.yml --env-file .env.local up -d --build
+# (Your config/auth/login on `hermes-home` is a separate volume and is kept.)
+#
+# ---------------------------------------------------------------------------
+# Why claude is baked under /opt/hermes (and the node caveat)
+# ---------------------------------------------------------------------------
+# The WebUI runs the agent in-process, so claude-code spawns `claude` INSIDE
+# the WebUI container. We ship `claude` inside /opt/hermes (the source volume
+# the WebUI already mounts) and point HERMES_CLAUDE_CLI at it. The npm build
+# of claude needs `node` on PATH. If the WebUI base image has no node, switch
+# the `hermes-webui` service to the extended image (see docker/webui.Dockerfile
+# and the commented `build:`/HERMES_CLAUDE_CLI lines below).
+#
+name: hermes-local
+
+services:
+  hermes-agent:
+    build:
+      context: .
+      args:
+        HERMES_GIT_SHA: ${HERMES_GIT_SHA:-}
+    image: hermes-agent:local
+    container_name: hermes-agent
+    restart: unless-stopped
+    command: ["gateway", "run"]
+    environment:
+      # Match the WebUI's UID/GID so files on the shared volume stay consistent.
+      - HERMES_UID=${HERMES_UID:-1000}
+      - HERMES_GID=${HERMES_GID:-1000}
+      # claude-code provider → the claude CLI baked into the image.
+      - HERMES_CLAUDE_CLI=/opt/hermes/.claude-cli/bin/claude
+      # Share the Claude subscription login across both containers. This dir
+      # lives on the `hermes-home` volume (mounted at /opt/data here).
+      - CLAUDE_CONFIG_DIR=/opt/data/claude
+      # Standard API-billed providers (optional; leave blank to skip).
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    volumes:
+      - hermes-home:/opt/data
+      - hermes-agent-src:/opt/hermes
+    healthcheck:
+      test: ["CMD-SHELL", "test -d /opt/data || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  hermes-webui:
+    image: ghcr.io/nesquena/hermes-webui:${HERMES_WEBUI_TAG:-0.51.92}
+    # If the WebUI base image lacks `node` (needed by the npm claude bin),
+    # comment out the `image:` line above and use the extended image instead:
+    # build:
+    #   context: .
+    #   dockerfile: docker/webui.Dockerfile
+    #   args:
+    #     HERMES_WEBUI_TAG: ${HERMES_WEBUI_TAG:-0.51.92}
+    # image: hermes-webui:local
+    container_name: hermes-webui
+    restart: unless-stopped
+    depends_on:
+      - hermes-agent
+    ports:
+      - "${HERMES_WEBUI_PORT:-8787}:8787"
+    environment:
+      - HERMES_WEBUI_HOST=0.0.0.0
+      - HERMES_WEBUI_PORT=8787
+      - HERMES_HOME=/home/hermeswebui/.hermes
+      - HERMES_WEBUI_AGENT_DIR=/home/hermeswebui/.hermes/hermes-agent
+      - HERMES_WEBUI_STATE_DIR=/home/hermeswebui/.hermes/webui
+      - WANTED_UID=${HERMES_UID:-1000}
+      - WANTED_GID=${HERMES_GID:-1000}
+      - HERMES_WEBUI_PASSWORD=admin
+      # claude-code runs IN this container — point it at the claude CLI that
+      # rides along in the read-only source volume.
+      - HERMES_CLAUDE_CLI=/home/hermeswebui/.hermes/hermes-agent/.claude-cli/bin/claude
+      # When using the extended image (docker/webui.Dockerfile), use instead:
+      # - HERMES_CLAUDE_CLI=/usr/local/bin/claude
+      - CLAUDE_CONFIG_DIR=/home/hermeswebui/.hermes/claude
+    volumes:
+      - hermes-home:/home/hermeswebui/.hermes
+      - hermes-agent-src:/home/hermeswebui/.hermes/hermes-agent:ro
+      - hermes-workspace:/workspace
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8787/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  hermes-home:
+  hermes-agent-src:
+  hermes-workspace:
