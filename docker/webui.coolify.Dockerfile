@@ -16,15 +16,23 @@ FROM ghcr.io/nesquena/hermes-webui:${HERMES_WEBUI_TAG}
 
 USER root
 
-# 1) Self-contained native `claude` CLI (no node dependency) at a fixed path.
+# 1) Self-contained native `claude` CLI (no node dependency).
+#    IMPORTANT: install with HOME=/opt/claude, NOT the default /root. The
+#    installer drops the binary under $HOME/.local/share/claude and symlinks
+#    $HOME/.local/bin/claude to it. /root is mode 0700, so the WebUI's runtime
+#    user (uid 1000, after the WANTED_UID remap) cannot traverse it and `which`
+#    finds nothing → "claude CLI not installed". Installing under /opt/claude
+#    (world-traversable 0755) makes the binary reachable by uid 1000.
 RUN set -eu; \
     if ! command -v curl >/dev/null 2>&1; then \
         (apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*) \
         || (apk add --no-cache curl ca-certificates); \
     fi; \
+    export HOME=/opt/claude; \
+    mkdir -p /opt/claude; \
     curl -fsSL https://claude.ai/install.sh | bash; \
-    install_bin="$(command -v claude || echo "$HOME/.local/bin/claude")"; \
-    ln -sf "$install_bin" /usr/local/bin/claude; \
+    chmod -R a+rX /opt/claude/.local; \
+    ln -sf /opt/claude/.local/bin/claude /usr/local/bin/claude; \
     /usr/local/bin/claude --version
 
 # 2) Bake this fork's agent source at /opt/hermes — the WebUI entrypoint's

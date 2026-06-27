@@ -18,12 +18,17 @@ FROM ghcr.io/nesquena/hermes-webui:${HERMES_WEBUI_TAG}
 USER root
 
 # Self-contained native claude binary — no node required at runtime.
+# Install under /opt/claude (NOT the default /root, which is mode 0700 and
+# unreachable by the WebUI's uid-1000 runtime user — `which` would then find
+# nothing and the claude-code provider would report "claude not installed").
 RUN set -eu; \
     if ! command -v curl >/dev/null 2>&1; then \
         (apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*) \
         || (apk add --no-cache curl ca-certificates); \
     fi; \
+    export HOME=/opt/claude; \
+    mkdir -p /opt/claude; \
     curl -fsSL https://claude.ai/install.sh | bash; \
-    install_bin="$(command -v claude || echo "$HOME/.local/bin/claude")"; \
-    ln -sf "$install_bin" /usr/local/bin/claude; \
+    chmod -R a+rX /opt/claude/.local; \
+    ln -sf /opt/claude/.local/bin/claude /usr/local/bin/claude; \
     /usr/local/bin/claude --version
