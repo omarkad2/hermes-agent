@@ -37,6 +37,11 @@ services:
       - HERMES_CLAUDE_CLI=/usr/local/bin/claude
       # Subscription login lives on the persistent volume so it survives redeploys.
       - CLAUDE_CONFIG_DIR=/home/hermeswebui/.hermes/claude
+      # GitHub auth for the agent to clone PRIVATE repos. Set GH_TOKEN to a
+      # Personal Access Token (repo scope) in Coolify's env. gh + git both use
+      # it; nothing is written to the container fs. Leave blank for public-only.
+      - GH_TOKEN=${GH_TOKEN:-}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-${GH_TOKEN:-}}
     # Coolify proxies a domain to this port; set the domain in the Coolify UI.
     expose:
       - "8787"

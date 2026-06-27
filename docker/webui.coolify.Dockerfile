@@ -35,6 +35,28 @@ RUN set -eu; \
     ln -sf /opt/claude/.local/bin/claude /usr/local/bin/claude; \
     /usr/local/bin/claude --version
 
+# 1b) GitHub CLI + token-based git auth so the agent can clone PRIVATE repos.
+#     `gh` and git both read the GH_TOKEN (or GITHUB_TOKEN) env var you set in
+#     Coolify — nothing is stored in the container fs, so it survives redeploys.
+#     git uses gh as its credential helper for github.com (system-wide, so it
+#     applies to the uid-1000 runtime user without a per-user ~/.gitconfig).
+RUN set -eu; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends gnupg; \
+    mkdir -p -m 0755 /etc/apt/keyrings; \
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        -o /etc/apt/keyrings/githubcli-archive-keyring.gpg; \
+    chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg; \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends gh; \
+    rm -rf /var/lib/apt/lists/*; \
+    git config --system credential."https://github.com".helper '!gh auth git-credential'; \
+    git config --system credential."https://gist.github.com".helper '!gh auth git-credential'; \
+    git config --system safe.directory '*'; \
+    gh --version
+
 # 2) Bake this fork's agent source at /opt/hermes — the WebUI entrypoint's
 #    SECOND search path, deliberately NOT under the persistent ~/.hermes volume
 #    so redeploys pick up fresh code. Owned by uid 1000 (the WebUI's runtime

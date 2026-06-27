@@ -46,7 +46,24 @@ The WebUI runs the agent in-process, so no separate gateway container is needed.
 | Variable | Value | Notes |
 |---|---|---|
 | `HERMES_WEBUI_PASSWORD` | *a strong password* | **Required.** This is your WebUI login; the public URL is exposed. |
+| `GH_TOKEN` | *a GitHub PAT* | Optional — lets the agent clone **private** repos. See below. |
 | `HERMES_WEBUI_TAG` | `0.51.92` | Optional — pin the base WebUI image version. |
+
+### Cloning private GitHub repos
+
+The image bundles `gh` and configures git to use it as the credential helper for
+`github.com`, both reading the `GH_TOKEN` env var — nothing is written to the
+container filesystem, so it survives redeploys (a container-side `gh auth login`
+would NOT, since `~/.config/gh` and `~/.gitconfig` are outside the persistent
+volume).
+
+1. Create a GitHub **Personal Access Token** with `repo` scope (classic) or a
+   fine-grained token with read access to the repos you want.
+2. Set `GH_TOKEN` to that token in the Coolify resource's **Environment**.
+3. Redeploy. The agent can now `git clone https://github.com/owner/repo.git`
+   (private included) and run `gh` commands — no interactive login.
+
+Leave `GH_TOKEN` unset for public-only repos.
 
 ### 4. Persistent storage
 
