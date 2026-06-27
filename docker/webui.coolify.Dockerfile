@@ -72,4 +72,10 @@ COPY --chmod=0755 docker/webui-coolify-entrypoint.sh /usr/local/bin/webui-coolif
 
 ENV HERMES_CLAUDE_CLI=/usr/local/bin/claude
 
+# `hermes` lives in the WebUI's venv (/app/venv/bin), which isn't on PATH in an
+# interactive container shell. Add a shim on PATH so `hermes ...` works in the
+# Coolify terminal (the venv is created at first boot, so this delegates to it).
+RUN printf '#!/bin/sh\nexec /app/venv/bin/hermes "$@"\n' > /usr/local/bin/hermes \
+    && chmod 0755 /usr/local/bin/hermes
+
 CMD ["/usr/local/bin/webui-coolify-entrypoint.sh"]
