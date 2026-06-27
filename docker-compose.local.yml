@@ -77,6 +77,29 @@ services:
       timeout: 5s
       retries: 5
 
+  # One-shot perms fixer. The hermes-agent image bakes /opt/hermes as
+  # root-owned and read-only (`chown -R root:root` + `chmod -R a-w`, see
+  # Dockerfile). The WebUI shares that tree via the hermes-agent-src volume,
+  # stages a copy with `rsync -a` (which preserves owner+perms) and then
+  # `rm -rf`s the copy — which fails as uid 1000 on root:0555 dirs, crash-
+  # looping the WebUI. Once the agent has seeded the volume, hand ownership to
+  # the runtime UID so the WebUI can manage its staging copy. Runs to
+  # completion (restart: "no") and the WebUI waits on it via depends_on.
+  agent-src-perms:
+    image: busybox
+    container_name: hermes-agent-src-perms
+    user: "0:0"
+    restart: "no"
+    command: >-
+      sh -c "chown -R ${HERMES_UID:-1000}:${HERMES_GID:-1000} /src &&
+             chmod -R u+rwX /src &&
+             echo 'agent-src perms fixed for uid ${HERMES_UID:-1000}'"
+    depends_on:
+      hermes-agent:
+        condition: service_healthy
+    volumes:
+      - hermes-agent-src:/src
+
   hermes-webui:
     image: ghcr.io/nesquena/hermes-webui:${HERMES_WEBUI_TAG:-0.51.92}
     # If the WebUI base image lacks `node` (needed by the npm claude bin),
@@ -90,7 +113,8 @@ services:
     container_name: hermes-webui
     restart: unless-stopped
     depends_on:
-      - hermes-agent
+      agent-src-perms:
+        condition: service_completed_successfully
     ports:
       - "${HERMES_WEBUI_PORT:-8787}:8787"
     environment:

@@ -1205,7 +1205,13 @@ _PROVIDER_ALIASES = {
     "minimax-global": "minimax-oauth",
     "minimax_oauth": "minimax-oauth",
     "claude": "anthropic",
-    # "claude-code" is a distinct subprocess/subscription provider — not an alias.
+    # "claude-code" is a distinct subprocess/subscription provider — NOT an alias
+    # for anthropic. The self-mapping is load-bearing for the Hermes WebUI:
+    # api/config.py:_resolve_provider_alias() consults THIS table before its own,
+    # whose baked default maps "claude-code" → "anthropic" (which would canonical-
+    # ise our provider into the Anthropic group and route to the API-billed path).
+    # Mapping claude-code → claude-code here overrides that and keeps it distinct.
+    "claude-code": "claude-code",
     "deep-seek": "deepseek",
     "opencode": "opencode-zen",
     "zen": "opencode-zen",

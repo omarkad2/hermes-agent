@@ -1641,6 +1641,24 @@ def resolve_runtime_provider(
             "requested_provider": requested_provider,
         }
 
+    # Claude Code (subscription billing via the local `claude` CLI subprocess).
+    # Mirrors the copilot-acp external-process branch above: resolve the binary
+    # and return a runtime that ClaudeCodeClient consumes. base_url stays the
+    # "claude-code://local" marker (no HTTP). resolve_external_process_provider_
+    # credentials() raises AuthError (fail-loud) if the CLI is missing.
+    if provider == "claude-code":
+        creds = resolve_external_process_provider_credentials(provider)
+        return {
+            "provider": "claude-code",
+            "api_mode": "chat_completions",
+            "base_url": creds.get("base_url", "").rstrip("/"),
+            "api_key": creds.get("api_key", ""),
+            "command": creds.get("command", ""),
+            "args": list(creds.get("args") or []),
+            "source": creds.get("source", "process"),
+            "requested_provider": requested_provider,
+        }
+
     # Anthropic (native Messages API)
     if provider == "anthropic":
         # Allow base URL override from config.yaml model.base_url, but only
