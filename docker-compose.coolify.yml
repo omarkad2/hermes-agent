@@ -1,0 +1,55 @@
+# docker-compose.coolify.yml — single self-contained WebUI for Coolify
+#
+# One service: the Hermes WebUI with THIS fork's agent (claude-code provider)
+# and the native `claude` CLI baked in (docker/webui.coolify.Dockerfile). The
+# WebUI runs the agent in-process, so no separate gateway container is needed.
+#
+# Each push rebuilds the image with fresh code (agent source baked at /opt/hermes,
+# NOT on a volume). Only user state — config.yaml, the `claude login` session,
+# and WebUI sessions — lives on the persistent `hermes-home` volume, so it
+# survives redeploys.
+#
+# See DEPLOY-COOLIFY.md for the Coolify setup (domain, env, auto-deploy, and the
+# one-time `claude login`).
+#
+name: hermes
+
+services:
+  hermes-webui:
+    build:
+      context: .
+      dockerfile: docker/webui.coolify.Dockerfile
+      args:
+        HERMES_WEBUI_TAG: ${HERMES_WEBUI_TAG:-0.51.92}
+    restart: unless-stopped
+    environment:
+      - HERMES_WEBUI_HOST=0.0.0.0
+      - HERMES_WEBUI_PORT=8787
+      - HERMES_HOME=/home/hermeswebui/.hermes
+      - HERMES_WEBUI_STATE_DIR=/home/hermeswebui/.hermes/webui
+      - HERMES_WEBUI_DEFAULT_WORKSPACE=/workspace
+      # Runtime user the container drops to; owns the persistent volume files.
+      - WANTED_UID=1000
+      - WANTED_GID=1000
+      # REQUIRED: set a strong password in Coolify's env (do NOT leave default).
+      - HERMES_WEBUI_PASSWORD=${HERMES_WEBUI_PASSWORD:?set HERMES_WEBUI_PASSWORD in Coolify}
+      # claude-code provider → the native claude binary baked into the image.
+      - HERMES_CLAUDE_CLI=/usr/local/bin/claude
+      # Subscription login lives on the persistent volume so it survives redeploys.
+      - CLAUDE_CONFIG_DIR=/home/hermeswebui/.hermes/claude
+    # Coolify proxies a domain to this port; set the domain in the Coolify UI.
+    expose:
+      - "8787"
+    volumes:
+      - hermes-home:/home/hermeswebui/.hermes
+      - hermes-workspace:/workspace
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8787/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 600s
+
+volumes:
+  hermes-home:
+  hermes-workspace:
