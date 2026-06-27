@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","cwd":"/private/tmp","session_id":"err-0001","tools":[],"model":"claude-sonnet-4-6","permissionMode":"bypassPermissions","apiKeySource":"none","claude_code_version":"2.1.84"}
+{"type":"result","subtype":"error_during_execution","is_error":true,"duration_ms":120,"num_turns":0,"result":"Invalid API key · Please run /login","session_id":"err-0001","total_cost_usd":0.0,"usage":{"input_tokens":0,"output_tokens":0}}

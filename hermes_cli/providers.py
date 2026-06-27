@@ -97,6 +97,14 @@ HERMES_OVERLAYS: Dict[str, HermesOverlay] = {
         transport="anthropic_messages",
         extra_env_vars=("ANTHROPIC_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"),
     ),
+    # Subscription billing via the local `claude` CLI spawned as a subprocess.
+    # NOT the API-billed `anthropic` provider — no API key, no HTTP to Anthropic.
+    "claude-code": HermesOverlay(
+        transport="chat_completions",  # subprocess facade routes via chat_completions
+        auth_type="external_process",
+        base_url_override="claude-code://local",
+        base_url_env_var="HERMES_CLAUDE_BASE_URL",
+    ),
     "zai": HermesOverlay(
         transport="openai_chat",
         extra_env_vars=("GLM_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY"),
@@ -273,7 +281,9 @@ ALIASES: Dict[str, str] = {
 
     # anthropic
     "claude": "anthropic",
-    "claude-code": "anthropic",
+    # NOTE: "claude-code" is intentionally NOT aliased to "anthropic" — it is a
+    # distinct provider (subprocess-backed, subscription billing via the local
+    # `claude` CLI). See HERMES_OVERLAYS["claude-code"] and agent/claude_code_client.py.
 
     # github-copilot (models.dev ID)
     "copilot": "github-copilot",
@@ -358,6 +368,7 @@ _LABEL_OVERRIDES: Dict[str, str] = {
     "nous": "Nous Portal",
     "openai-codex": "OpenAI Codex",
     "copilot-acp": "GitHub Copilot ACP",
+    "claude-code": "Claude Code (subscription, via local CLI)",
     "stepfun": "StepFun Step Plan",
     "xiaomi": "Xiaomi MiMo",
     "gmi": "GMI Cloud",

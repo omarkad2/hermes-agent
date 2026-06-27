@@ -225,6 +225,13 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
         inference_base_url=DEFAULT_COPILOT_ACP_BASE_URL,
         base_url_env_var="COPILOT_ACP_BASE_URL",
     ),
+    "claude-code": ProviderConfig(
+        id="claude-code",
+        name="Claude Code (subscription, via local CLI)",
+        auth_type="external_process",
+        inference_base_url="claude-code://local",
+        base_url_env_var="HERMES_CLAUDE_BASE_URL",
+    ),
     "gemini": ProviderConfig(
         id="gemini",
         name="Google AI Studio",
@@ -1514,7 +1521,7 @@ def resolve_provider(
         "minimax-portal": "minimax-oauth", "minimax-global": "minimax-oauth", "minimax_oauth": "minimax-oauth",
         "alibaba_coding": "alibaba-coding-plan", "alibaba-coding": "alibaba-coding-plan",
         "alibaba_coding_plan": "alibaba-coding-plan",
-        "claude": "anthropic", "claude-code": "anthropic",
+        "claude": "anthropic",  # "claude-code" is a distinct subprocess/subscription provider — not an alias.
         "github": "copilot", "github-copilot": "copilot",
         "github-models": "copilot", "github-model": "copilot",
         "github-copilot-acp": "copilot-acp", "copilot-acp-agent": "copilot-acp",
@@ -6049,6 +6056,28 @@ def get_external_process_provider_status(provider_id: str) -> Dict[str, Any]:
     if not pconfig or pconfig.auth_type != "external_process":
         return {"configured": False}
 
+    base_url = os.getenv(pconfig.base_url_env_var, "").strip() if pconfig.base_url_env_var else ""
+    if not base_url:
+        base_url = pconfig.inference_base_url
+
+    if provider_id == "claude-code":
+        # "auth" for this provider is the presence of a logged-in `claude` CLI.
+        # We deliberately do NOT inspect tokens — billing runs inside the
+        # subprocess via the user's own session.
+        command = os.getenv("HERMES_CLAUDE_CLI", "").strip() or "claude"
+        args: list[str] = []
+        resolved_command = shutil.which(command) if command else None
+        return {
+            "configured": bool(resolved_command),
+            "provider": provider_id,
+            "name": pconfig.name,
+            "command": command,
+            "args": args,
+            "resolved_command": resolved_command,
+            "base_url": base_url,
+            "logged_in": bool(resolved_command),
+        }
+
     command = (
         os.getenv("HERMES_COPILOT_ACP_COMMAND", "").strip()
         or os.getenv("COPILOT_CLI_PATH", "").strip()
@@ -6056,9 +6085,6 @@ def get_external_process_provider_status(provider_id: str) -> Dict[str, Any]:
     )
     raw_args = os.getenv("HERMES_COPILOT_ACP_ARGS", "").strip()
     args = shlex.split(raw_args) if raw_args else ["--acp", "--stdio"]
-    base_url = os.getenv(pconfig.base_url_env_var, "").strip() if pconfig.base_url_env_var else ""
-    if not base_url:
-        base_url = pconfig.inference_base_url
 
     resolved_command = shutil.which(command) if command else None
     return {
@@ -6090,7 +6116,7 @@ def get_auth_status(provider_id: Optional[str] = None) -> Dict[str, Any]:
         return get_qwen_auth_status()
     if target == "minimax-oauth":
         return get_minimax_oauth_auth_status()
-    if target == "copilot-acp":
+    if target in {"copilot-acp", "claude-code"}:
         return get_external_process_provider_status(target)
     if target == "azure-foundry":
         return _get_azure_foundry_auth_status()
@@ -6243,6 +6269,29 @@ def resolve_external_process_provider_credentials(provider_id: str) -> Dict[str,
     base_url = os.getenv(pconfig.base_url_env_var, "").strip() if pconfig.base_url_env_var else ""
     if not base_url:
         base_url = pconfig.inference_base_url
+
+    if provider_id == "claude-code":
+        command = os.getenv("HERMES_CLAUDE_CLI", "").strip() or "claude"
+        resolved_command = shutil.which(command) if command else None
+        if not resolved_command:
+            raise AuthError(
+                "The 'claude' CLI (Claude Code) is not installed or not on your PATH. "
+                "This provider bills against your Claude subscription via the local CLI:\n"
+                "  1. Install: npm install -g @anthropic-ai/claude-code\n"
+                "  2. Log in:  claude login\n"
+                "Or set HERMES_CLAUDE_CLI to your claude binary.",
+                provider=provider_id,
+                code="missing_claude_cli",
+            )
+        return {
+            "provider": provider_id,
+            "api_key": "claude-code",
+            "base_url": base_url,
+            "command": resolved_command,
+            # Args are built by ClaudeCodeClient itself (plus HERMES_CLAUDE_ARGS).
+            "args": [],
+            "source": "process",
+        }
 
     command = (
         os.getenv("HERMES_COPILOT_ACP_COMMAND", "").strip()

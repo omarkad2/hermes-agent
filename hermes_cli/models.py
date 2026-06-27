@@ -241,6 +241,16 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
     "copilot-acp": [
         "copilot-acp",
     ],
+    # Routed through the local `claude` CLI subprocess (subscription billing).
+    # The CLI accepts full names or aliases ("sonnet"/"opus"/"haiku").
+    "claude-code": [
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+        "claude-sonnet-4-6",
+        "claude-opus-4-5-20251101",
+        "claude-sonnet-4-5-20250929",
+        "claude-haiku-4-5-20251001",
+    ],
     "copilot": [
         "gpt-5.4",
         "gpt-5.4-mini",
@@ -1006,6 +1016,7 @@ CANONICAL_PROVIDERS: list[ProviderEntry] = [
     ProviderEntry("novita",         "NovitaAI",                 "NovitaAI (Cloud: Model API, Agent Sandbox, GPU Cloud)"),
     ProviderEntry("lmstudio",       "LM Studio",                "LM Studio (Local desktop app with built-in model server)"),
     ProviderEntry("anthropic",      "Anthropic",                "Anthropic (Claude models via API key or Claude Code)"),
+    ProviderEntry("claude-code",    "Claude Code (subscription, via local CLI)", "Claude Code (Subscription billing via local `claude` CLI subprocess)"),
     ProviderEntry("openai-codex",   "OpenAI Codex",             "OpenAI Codex (Codex CLI via ChatGPT subscription or API key)"),
     ProviderEntry("openai-api",     "OpenAI API",               "OpenAI API (api.openai.com, API key)"),
     ProviderEntry("alibaba",        "Qwen Cloud",               "Qwen Cloud / DashScope (Qwen + multi-provider)"),
@@ -1194,7 +1205,13 @@ _PROVIDER_ALIASES = {
     "minimax-global": "minimax-oauth",
     "minimax_oauth": "minimax-oauth",
     "claude": "anthropic",
-    "claude-code": "anthropic",
+    # "claude-code" is a distinct subprocess/subscription provider — NOT an alias
+    # for anthropic. The self-mapping is load-bearing for the Hermes WebUI:
+    # api/config.py:_resolve_provider_alias() consults THIS table before its own,
+    # whose baked default maps "claude-code" → "anthropic" (which would canonical-
+    # ise our provider into the Anthropic group and route to the API-billed path).
+    # Mapping claude-code → claude-code here overrides that and keeps it distinct.
+    "claude-code": "claude-code",
     "deep-seek": "deepseek",
     "opencode": "opencode-zen",
     "zen": "opencode-zen",

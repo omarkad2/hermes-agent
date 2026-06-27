@@ -5761,10 +5761,14 @@ _OAUTH_PROVIDER_CATALOG: tuple[Dict[str, Any], ...] = (
         "status_fn": _anthropic_oauth_status,
     },
     {
+        # Subscription billing via the local `claude` CLI spawned as a
+        # subprocess (provider key "claude-code"; see agent/claude_code_client.py).
+        # Connecting means logging the CLI into your Claude subscription; Hermes
+        # never mints or handles the OAuth token itself.
         "id": "claude-code",
-        "name": "Anthropic OAuth: Required Extra Usage Credits to Use Subscription",
+        "name": "Claude Code (subscription, via local CLI)",
         "flow": "external",
-        "cli_command": "claude setup-token",
+        "cli_command": "claude login",
         "docs_url": "https://docs.claude.com/en/docs/claude-code",
         "status_fn": _claude_code_only_status,
     },
