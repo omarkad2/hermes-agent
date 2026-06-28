@@ -169,7 +169,8 @@ class ClaudeCodeClientShapeTests(unittest.TestCase):
     def test_build_command_disables_tools_and_replaces_system_prompt(self) -> None:
         client = ClaudeCodeClient(command="/usr/bin/claude")
         with patch.dict(os.environ, {}, clear=False):
-            for key in ("HERMES_CLAUDE_ARGS", "HERMES_CLAUDE_SYSTEM_PROMPT_MODE", "HERMES_CLAUDE_SKIP_PERMISSIONS"):
+            for key in ("HERMES_CLAUDE_ARGS", "HERMES_CLAUDE_SYSTEM_PROMPT_MODE",
+                        "HERMES_CLAUDE_SKIP_PERMISSIONS", "HERMES_CLAUDE_TOOLS"):
                 os.environ.pop(key, None)
             cmd = client._build_command("claude-sonnet-4-6", "SYS BLOCK")
         self.assertEqual(cmd[0], "/usr/bin/claude")
@@ -195,6 +196,42 @@ class ClaudeCodeClientShapeTests(unittest.TestCase):
         with patch.dict(os.environ, {"HERMES_CLAUDE_SKIP_PERMISSIONS": "1"}, clear=False):
             cmd = client._build_command("m", "")
         self.assertIn("--dangerously-skip-permissions", cmd)
+
+
+class ClaudeCodeToolsModeTests(unittest.TestCase):
+    """HERMES_CLAUDE_TOOLS=1 → let Claude Code use its own tools (agent mode)."""
+
+    def test_tools_mode_command(self) -> None:
+        client = ClaudeCodeClient(command="/usr/bin/claude")
+        with patch.dict(os.environ, {"HERMES_CLAUDE_TOOLS": "1"}, clear=False):
+            for key in ("HERMES_CLAUDE_SYSTEM_PROMPT_MODE", "HERMES_CLAUDE_SKIP_PERMISSIONS"):
+                os.environ.pop(key, None)
+            cmd = client._build_command("sonnet", "HERMES SYSTEM BLOCK")
+        # tools NOT disabled, permissions skipped, Hermes prompt withheld so it
+        # doesn't fight Claude Code's native tools.
+        self.assertNotIn("--tools", cmd)
+        self.assertIn("--dangerously-skip-permissions", cmd)
+        self.assertNotIn("--system-prompt", cmd)
+        self.assertNotIn("--append-system-prompt", cmd)
+
+    def test_tools_mode_interleaves_tool_use_in_text(self) -> None:
+        events = [
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "Cloning now."},
+                {"type": "tool_use", "name": "Bash",
+                 "input": {"command": "git clone https://github.com/foo/bar.git"}},
+            ]}},
+            {"type": "result", "subtype": "success", "is_error": False,
+             "result": "Done.", "usage": {"input_tokens": 3, "output_tokens": 2}},
+        ]
+        out = aggregate_stream(iter(events), include_tools=True)
+        self.assertIn("Cloning now.", out.text)
+        self.assertIn("Bash", out.text)
+        self.assertIn("git clone", out.text)
+        # Plain mode (v1) must NOT leak tool markers.
+        plain = aggregate_stream(iter(events), include_tools=False)
+        self.assertNotIn("Bash", plain.text)
+        self.assertIn("Cloning now.", plain.text)
 
 
 @unittest.skipUnless(

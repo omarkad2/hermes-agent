@@ -47,7 +47,23 @@ The WebUI runs the agent in-process, so no separate gateway container is needed.
 |---|---|---|
 | `HERMES_WEBUI_PASSWORD` | *a strong password* | **Required.** This is your WebUI login; the public URL is exposed. |
 | `GH_TOKEN` | *a GitHub PAT* | Optional — lets the agent clone **private** repos. See below. |
+| `HERMES_CLAUDE_TOOLS` | `1` | Agent mode: let Claude Code run its own tools (commands, files, git) in `/workspace`. Set `0` for chat-only. Compose defaults it on. |
 | `HERMES_WEBUI_TAG` | `0.51.92` | Optional — pin the base WebUI image version. |
+
+### Agent (tools) mode
+
+With `HERMES_CLAUDE_TOOLS=1` (the compose default), the `claude` subprocess uses
+its **own** tools — so asking the chat to "clone repo X and run the tests"
+actually does it, in `/workspace` (the persistent `hermes-workspace` volume),
+billed on your subscription. Tool actions are shown inline in the reply.
+
+- It runs commands non-interactively (`--dangerously-skip-permissions`), so only
+  enable it on an instance you trust — the agent can execute arbitrary commands
+  in the container.
+- Hermes' own system prompt/persona is withheld in this mode (it would fight
+  Claude Code's native tools); you're effectively chatting with a Claude Code
+  agent. Set `HERMES_CLAUDE_TOOLS=0` to go back to a plain chat model with
+  Hermes' persona.
 
 ### Cloning private GitHub repos
 

@@ -35,6 +35,11 @@ services:
       - HERMES_WEBUI_PASSWORD=${HERMES_WEBUI_PASSWORD:?set HERMES_WEBUI_PASSWORD in Coolify}
       # claude-code provider → the native claude binary baked into the image.
       - HERMES_CLAUDE_CLI=/usr/local/bin/claude
+      # Claude-Code-as-agent: let the claude subprocess use its own tools (Bash,
+      # file edit, git, …) so it does real work in /workspace, on the
+      # subscription. Set to 0 to fall back to pure chat (no tools).
+      - HERMES_CLAUDE_TOOLS=1
+      - HERMES_CLAUDE_WORKSPACE=/workspace
       # Subscription login lives on the persistent volume so it survives redeploys.
       - CLAUDE_CONFIG_DIR=/home/hermeswebui/.hermes/claude
       # GitHub auth for the agent to clone PRIVATE repos. Set GH_TOKEN to a

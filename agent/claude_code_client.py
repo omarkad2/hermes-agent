@@ -15,17 +15,26 @@ collects the streamed JSON output, and returns the minimal duck-typed object
 (``SimpleNamespace``) that Hermes expects from an OpenAI client
 (``.choices[0].message`` + ``.usage`` + ``.model``).
 
-v1 is a *pure text-completion* endpoint:
-  * All of Claude Code's built-in tools are disabled (``--tools ""``) so the
-    subprocess cannot act on the host. Because no tools are available, no
-    permission prompts can ever fire — which is why this provider does NOT
-    pass ``--dangerously-skip-permissions`` by default (a flag seam exists
-    for callers who explicitly opt in).
-  * Hermes assembles its own system block, so we pass it with
-    ``--system-prompt`` (full *replace* of Claude Code's coding-agent system
-    prompt) rather than ``--append-system-prompt`` (which would stack on top).
-  * Each request is stateless: a fresh process is spawned and the full
-    assembled conversation is fed on stdin. Hermes already manages context.
+Two modes, selected by ``HERMES_CLAUDE_TOOLS``:
+
+* **Pure text-completion** (default): all of Claude Code's built-in tools are
+  disabled (``--tools ""``) so the subprocess cannot act on the host. No tools
+  means no permission prompts, so ``--dangerously-skip-permissions`` stays off.
+  Hermes' full system block is sent via ``--system-prompt`` (replace).
+
+* **Agent / tools mode** (``HERMES_CLAUDE_TOOLS=1``): Claude Code keeps its
+  native tools (Bash, file edit, git, web, …) and actually does work — clone
+  repos, run commands, edit files — in its workspace (``HERMES_CLAUDE_WORKSPACE``,
+  default ``/workspace``), all billed on the subscription. ``--dangerously-skip-
+  permissions`` defaults on (non-interactive), and Hermes' system block is
+  withheld by default (it describes Hermes' OWN text-format tools, which would
+  fight Claude Code's native tools and make the model *narrate* tool calls
+  instead of running them). ``tool_use`` actions are interleaved into the
+  returned text so the user sees what the agent did.
+
+Each request is stateless either way: a fresh process is spawned and the full
+assembled conversation is fed on stdin (Hermes manages context). In tools mode
+Claude Code runs its own internal agent loop within that single process.
 
 A clearly marked extension point (``# v2-seam``) shows where a future
 persistent-stdio session (``--input-format stream-json``, one process across
@@ -107,21 +116,62 @@ def _resolve_extra_args() -> list[str]:
     return shlex.split(raw) if raw else []
 
 
-def _system_prompt_mode() -> str:
-    """'replace' (default) → --system-prompt; 'append' → --append-system-prompt.
+def _tools_enabled() -> bool:
+    """Claude-Code-as-agent mode: let the ``claude`` subprocess use its OWN
+    tools (Bash, file edit, web, …) so it actually performs work (clone repos,
+    run commands, edit files) in the container, billed on the subscription.
 
-    Hermes ships a full system block, so the default replaces Claude Code's
-    built-in coding-agent prompt rather than stacking on top of it.
+    OFF by default (the safe pure-completion v1 behavior). Turn on with
+    ``HERMES_CLAUDE_TOOLS=1``. When on, the subprocess can run arbitrary
+    commands in its working directory, so only enable it on instances you trust.
     """
-    mode = os.getenv("HERMES_CLAUDE_SYSTEM_PROMPT_MODE", "replace").strip().lower()
-    return "append" if mode == "append" else "replace"
+    return os.getenv("HERMES_CLAUDE_TOOLS", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _system_prompt_mode() -> str:
+    """'replace' → --system-prompt; 'append' → --append-system-prompt;
+    'off' → don't send Hermes' system prompt at all.
+
+    Default when unset: ``replace`` normally, but ``off`` in tools mode —
+    Hermes' block describes its OWN text-format tools, which fights Claude
+    Code's native tools and makes the model *narrate* tool calls instead of
+    running them. Leaving it off lets Claude Code use its native agent prompt.
+    """
+    raw = os.getenv("HERMES_CLAUDE_SYSTEM_PROMPT_MODE", "").strip().lower()
+    if raw in {"off", "none", "skip"}:
+        return "off"
+    if raw == "append":
+        return "append"
+    if raw == "replace":
+        return "replace"
+    return "off" if _tools_enabled() else "replace"
 
 
 def _skip_permissions_enabled() -> bool:
-    """v1 disables all tools, so permission prompts cannot fire and this stays
-    OFF. The seam exists only for callers who explicitly opt in (e.g. a future
-    v2 that re-enables a curated tool set)."""
-    return os.getenv("HERMES_CLAUDE_SKIP_PERMISSIONS", "").strip().lower() in {"1", "true", "yes", "on"}
+    """Whether to pass ``--dangerously-skip-permissions``.
+
+    Required in tools mode so a non-interactive run never blocks on a permission
+    prompt — so it defaults ON when tools are enabled. In pure-completion mode
+    there are no tools and thus no prompts, so it stays OFF. Explicit env always
+    wins.
+    """
+    raw = os.getenv("HERMES_CLAUDE_SKIP_PERMISSIONS", "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return _tools_enabled()
+
+
+def _resolve_workspace() -> Optional[str]:
+    """Working directory for the subprocess in tools mode (where clones/files
+    land). ``HERMES_CLAUDE_WORKSPACE`` wins; else ``/workspace`` if present."""
+    raw = os.getenv("HERMES_CLAUDE_WORKSPACE", "").strip()
+    if raw:
+        return raw
+    if _tools_enabled() and os.path.isdir("/workspace"):
+        return "/workspace"
+    return None
 
 
 def _resolve_timeout(timeout: Any) -> float:
@@ -254,6 +304,51 @@ def _iter_assistant_text(event: dict[str, Any]) -> Iterator[str]:
                 yield text
 
 
+def _render_tool_use(block: dict[str, Any]) -> str:
+    """A compact, markdown-friendly one-liner for a Claude Code tool call so the
+    user can see what the agent did (e.g. ``› Bash: git clone …``)."""
+    name = str(block.get("name") or "tool")
+    inp = block.get("input")
+    desc = ""
+    if isinstance(inp, dict):
+        for key in ("command", "file_path", "path", "pattern", "url", "query", "description", "prompt"):
+            val = inp.get(key)
+            if isinstance(val, str) and val.strip():
+                desc = val.strip()
+                break
+        if not desc:
+            try:
+                desc = json.dumps(inp, ensure_ascii=True)
+            except Exception:
+                desc = str(inp)
+    elif inp is not None:
+        desc = str(inp)
+    desc = " ".join(desc.split())
+    if len(desc) > 300:
+        desc = desc[:297] + "..."
+    return f"\n\n› **{name}**: `{desc}`\n" if desc else f"\n\n› **{name}**\n"
+
+
+def _iter_assistant_segments(event: dict[str, Any], include_tools: bool) -> Iterator[str]:
+    """Like :func:`_iter_assistant_text` but, when *include_tools* is set, also
+    emits a marker for each ``tool_use`` block, in order, so tools-mode output
+    interleaves the agent's narration with the actions it took."""
+    message = event.get("message") or {}
+    content = message.get("content")
+    if not isinstance(content, list):
+        return
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        btype = block.get("type")
+        if btype == "text":
+            text = block.get("text")
+            if isinstance(text, str) and text:
+                yield text
+        elif btype == "tool_use" and include_tools:
+            yield _render_tool_use(block)
+
+
 def _map_usage(usage: dict[str, Any]) -> SimpleNamespace:
     def _int(key: str) -> int:
         val = usage.get(key)
@@ -277,12 +372,14 @@ class StreamOutcome(SimpleNamespace):
     """Aggregated result of consuming a claude stream-json run."""
 
 
-def aggregate_stream(events: Iterable[dict[str, Any]]) -> StreamOutcome:
+def aggregate_stream(events: Iterable[dict[str, Any]], include_tools: bool = False) -> StreamOutcome:
     """Consume parsed stream-json events into a single outcome.
 
     Raises ClaudeCodeError if the terminal ``result`` event reports an error.
     Unrecognized event types are ignored. The billing-lane signal from any
-    ``rate_limit_event`` is captured for diagnostics.
+    ``rate_limit_event`` is captured for diagnostics. When *include_tools* is
+    set (tools mode), ``tool_use`` actions are interleaved into the text so the
+    user sees what the agent did.
     """
     text_parts: list[str] = []
     usage = _map_usage({})
@@ -294,7 +391,7 @@ def aggregate_stream(events: Iterable[dict[str, Any]]) -> StreamOutcome:
     for event in events:
         etype = event.get("type")
         if etype == "assistant":
-            text_parts.extend(_iter_assistant_text(event))
+            text_parts.extend(_iter_assistant_segments(event, include_tools))
         elif etype == "rate_limit_event":
             info = event.get("rate_limit_info")
             if isinstance(info, dict):
@@ -363,7 +460,16 @@ class ClaudeCodeClient:
         self._default_headers = dict(default_headers or {})
         self._command_override = command
         self._extra_args = list(args) if args else None
-        self._cwd = str(Path(cwd or os.getcwd()).resolve())
+        # In tools mode the subprocess does real file work, so run it in a
+        # workspace dir (defaults to /workspace) rather than wherever the WebUI
+        # happens to live.
+        workspace = _resolve_workspace()
+        self._cwd = str(Path(workspace or cwd or os.getcwd()).resolve())
+        if _tools_enabled():
+            try:
+                Path(self._cwd).mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
         self.chat = _ClaudeCodeChatNamespace(self)
         self.is_closed = False
         self._active_process: subprocess.Popen[str] | None = None
@@ -409,14 +515,19 @@ class ClaudeCodeClient:
         ]
         if model:
             cmd += ["--model", str(model)]
-        # v1: disable ALL of Claude Code's built-in tools so the subprocess is a
-        # pure text-completion endpoint and cannot act on the host. With zero
-        # tools, permission prompts can never fire (see _skip_permissions_enabled).
-        cmd += ["--tools", ""]
+        if not _tools_enabled():
+            # Pure-completion mode: disable ALL of Claude Code's built-in tools
+            # so the subprocess cannot act on the host. With zero tools,
+            # permission prompts can never fire.
+            cmd += ["--tools", ""]
+        # Tools mode keeps Claude Code's default tools (Bash, file edit, …) so it
+        # can do real work; --dangerously-skip-permissions (default on in tools
+        # mode) keeps the non-interactive run from blocking on prompts.
         if _skip_permissions_enabled():
             cmd.append("--dangerously-skip-permissions")
-        if system_text:
-            flag = "--append-system-prompt" if _system_prompt_mode() == "append" else "--system-prompt"
+        mode = _system_prompt_mode()
+        if system_text and mode != "off":
+            flag = "--append-system-prompt" if mode == "append" else "--system-prompt"
             cmd += [flag, system_text]
         extra = self._extra_args if self._extra_args is not None else _resolve_extra_args()
         cmd += extra
@@ -558,7 +669,7 @@ class ClaudeCodeClient:
                     yield obj
 
         try:
-            outcome = aggregate_stream(_events())
+            outcome = aggregate_stream(_events(), include_tools=_tools_enabled())
         finally:
             self.close()
 
